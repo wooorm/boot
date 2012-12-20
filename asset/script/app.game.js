@@ -25,6 +25,10 @@ var Game = function Game( options )
 	this.context = new Context( this, options.context || {} );
 	this.player = new Player( this, options.player || {} );
 
+	this.default_speed = options.speed || 200;
+	this.speedx = this.default_speed;
+	this.speedy = this.default_speed;
+
 	return this;
 };
 
@@ -60,6 +64,7 @@ Game.prototype = {
 			this.then = this.now;
 		}
 	}
+	, 'temporary_speedy' : false
 	, 'draw' : function draw()
 	{
 		this.time.before();
@@ -76,7 +81,7 @@ Game.prototype = {
 
 		this.time.then = Date.now();
 
-		setInterval( function(){ _this.draw.call( _this ) }, 32 );
+		setInterval( function(){ _this.draw.call( _this ) }, 1 );
 		
 		return this;
 	}
@@ -119,7 +124,6 @@ var Context = function Context( game, options )
 	this.obstacles = new Obstacles( game, options.obstacle || {} );
 	this.powers = new Powers( game, options.power || {} );
 
-
 	this.listen();
 	this.draw_count = 0;
 
@@ -145,27 +149,26 @@ Context.prototype = {
 	}
 	, 'draw' : function draw()
 	{
-		var ctx = this.ctx
+		var _this = this
+		  , ctx = this.ctx
 		  , cw = ctx.canvas.width
 		  , ch = ctx.canvas.height
 		  , water = this.water
 		  , land = this.land
 		  , rock = this.rock
+		  , offsety = ( this.draw_count % 32 + 1 ) * game.speedy / 100
 		  ;
 
 		if ( water.ready )
-			this.game.set_blocks( water, 0, -1, this.block_width, this.block_height, 0, ( this.draw_count % 16 + 1 ) * 2 );
+			this.game.set_blocks( water, 0, -4, this.block_width, this.block_height, 0, offsety );
 
 		if ( land.ready )
 		{
-			this.game.set_blocks( land, 0, -1, 1, this.block_height, 0, ( this.draw_count % 16 + 1 ) * 2 );
-			this.game.set_blocks( land, this.block_width - 1, -1, this.block_width, this.block_height, 0, ( this.draw_count % 16 + 1 ) * 2 );
+			this.game.set_blocks( land, 0, -4, 1, this.block_height, 0, offsety );
+			this.game.set_blocks( land, this.block_width - 1, -4, this.block_width, this.block_height, 0, offsety );
 		}
 
-		// if ( this.draw_count === 32 )
-		// 	this.obstacles.spawn();
-
-		if ( this.draw_count % 32 === 0 )
+		if ( this.game.speedy !== 0 && this.draw_count % 32 === 0 )
 		{
 			if ( Math.random() < 0.5 )
 				this.obstacles.spawn();
@@ -173,16 +176,22 @@ Context.prototype = {
 				this.powers.spawn();
 		}
 		
-		// console.log( this.speed );
 
 		// if ( this.game.player.speed !== 0 )
 		// {
 			this.obstacles.update();
 			this.powers.update();
-			this.has_hit( [ this.obstacles, this.powers ], this.game.player );
+
+			[].concat( this.obstacles.children, this.powers.children ).forEach( function callback( Element )
+				{
+					if ( _this.has_contact.call( _this, Element, this.game.player ) )
+						_this.oncontact.call( _this, Element, this.game.player )
+				}
+			);
 		// }
 
-		this.draw_count++;
+		if ( game.speedy !== 0 )
+			this.draw_count++;
 	}
 	, 'keys' : {}
 	, 'is_pressed' : function is_pressed( key )
@@ -232,30 +241,14 @@ Context.prototype = {
 
 		return false;
 	}
-	, 'has_hit' : function has_hit( _elements, Player )
+	, 'has_contact' : function has_contact( Element, Player )
 	{
-		var _this = this;
-
-		_elements.forEach( function callback( elements )
-			{
-				elements = elements.children;
-
-				elements.forEach( function callback( Element )
-					{
-						if ( Player.left <= Element.right && Element.left <= Player.right && Player.top <= Element.bottom && Element.top <= Player.bottom )
-							_this.on.hit.call( _this, Element, Player );
-					}
-				);
-
-			}
-		);
+		return Player.left <= Element.right && Element.left <= Player.right && Player.top <= Element.bottom && Element.top <= Player.bottom;
 	}
-	, 'on' : {
-		'hit' : function hit( Element, Player )
-		{
-			if ( Element.on && Element.on.hit )
-				Element.on.hit.call( Element, Player )
-		}
+	, 'oncontact' : function contact( Element, Player )
+	{
+		if ( Element.oncontact )
+			Element.oncontact.call( Element, Player )
 	}
 };
 
@@ -272,8 +265,6 @@ var Player = function Player( game, options )
 
 	this.drawing = new Drawing( game, { 'source' : options.source } );
 
-	this.speed = options.speed || Math.PI * 100;
-
 	return this;
 }
 
@@ -283,7 +274,7 @@ Player.prototype = {
 		if ( this.drawing.ready )
 			this.game.set_block( this.drawing, this.block_x, this.block_y, this.offsetx, this.offsety );
 
-		this.game.context.ctx.strokeRect( this.left, this.top, this.right - this.left, this.bottom - this.top )
+		// this.game.context.ctx.strokeRect( this.left, this.top, this.right - this.left, this.bottom - this.top )
 	}
 	, 'update' : function update()
 	{
@@ -294,12 +285,16 @@ Player.prototype = {
 		  , delta  = game.time.delta
 		  , right  = ctx.is_pressed( 'Right' )
 		  , left   = ctx.is_pressed( 'Left' )
+		  , up    = ctx.is_pressed( 'Up' )
 		  , displacement, x, y, exist_left, exist_right
 		  ;
 
+		if ( !this.contact )
+			game.speedy = game.temporary_speedy !== false? game.temporary_speedy : !up? game.default_speed / 2 : game.default_speed;
+
     	if ( left || right )
   		{
-  			displacement = Math.round( this.speed * delta );
+  			displacement = Math.round( 1.5 * game.speedx * delta );
 
   			if ( displacement % 2 === 1 )
   				displacement--;
@@ -361,6 +356,7 @@ Player.prototype = {
 		this.offsetx = 0;
 		this.offsety = 0;
 	}
+	, 'contact' : null
 }
 
 
@@ -500,14 +496,6 @@ Elements.prototype = {
 	{
 		return Child.top > this.game.context.data.height
 	}
-	, 'has_hit' : function has_hit( player )
-	{
-		var pw = player.drawing.width
-		  , ph = player.drawing.height
-		  , px = player.x
-		  , py = player.y
-
-	}
 };
 
 
@@ -582,21 +570,26 @@ Element.prototype = {
   		  , top = this.block_y * b + this.offsety
 		  ;
 
-		this.left = left;
-		this.top = top;
-  		this.right = left + this.drawing.width;
-  		this.bottom = top + this.drawing.height;
-
-		if ( this.offsety >= b )
+		if ( !this.contact )
 		{
-			this.offsety -= b;
-			this.block_y++;
-		}
+			this.left = left;
+			this.top = top;
+	  		this.right = left + this.drawing.width;
+	  		this.bottom = top + this.drawing.height;
 
-		this.offsety += ctx.data.pixelblock;
+			if ( this.offsety >= b )
+			{
+				this.offsety -= b;
+				this.block_y++;
+			}
+
+			this.offsety += game.speedy / 100
+		}
+		else if ( !ctx.has_contact( this, game.player ) )
+			this.onavoid && this.onavoid( game.player )
 
 		game.set_block( this.drawing, this.block_x, this.block_y, this.offsetx, this.offsety );
-		this.game.context.ctx.strokeRect( this.left, this.top, this.right - this.left, this.bottom - this.top )
+		// this.game.context.ctx.strokeRect( this.left, this.top, this.right - this.left, this.bottom - this.top )
 	}
 	, 'remove' : function remove()
 	{}
@@ -604,9 +597,8 @@ Element.prototype = {
 	, 'topright' : null
 	, 'bottomleft' : null
 	, 'bottomright' : null
-	, 'on' : {
-		'hit' : function hit(){}
-	}
+	, 'contact' : null
+	, 'oncontact' : function contact(){}
 };
 
 
@@ -622,7 +614,21 @@ Element.prototype = {
 	}
 
 	Power.prototype = Object.create( Element.prototype );
-	Power.prototype.on.hit = function hit(){ console.log( 'Power', this, arguments ); }
+	Power.prototype.oncontact = function contact( Player )
+	{
+		if ( this.current_timout )
+			clearTimeout( this.current_timout );
+
+		var game = this.game;
+
+		game.temporary_speedy = ( this.data.type === 'down'? game.default_speed / 2 : game.default_speed * 2 );
+
+		this.current_timout = setTimeout( function callback()
+			{
+				game.temporary_speedy = false
+			}, 4000
+		);
+	}
 
 
 	// =========================================================================
@@ -635,7 +641,19 @@ Element.prototype = {
 	}
 
 	Obstacle.prototype = Object.create( Element.prototype );
-	Obstacle.prototype.on.hit = function hit( Player ){ console.log( 'Obstacle', this, arguments ); return; Player.speed = 0; this.speed = 0; }
+	Obstacle.prototype.oncontact = function contact( Player )
+	{
+		this.contact = Player.contact = true;
+		this.game.speedy = 0;
+		
+		if ( this.data.type !== 'down' )
+			this.game.temporary_speedy = false
+	}
+	Obstacle.prototype.onavoid = function avoid( Player )
+	{
+		this.contact = Player.contact = false;
+		this.game.speedy = this.game.default_speed;
+	}
 
 
 
